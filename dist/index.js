@@ -29962,7 +29962,6 @@ function getAllFiles(dirPath, arrayOfFiles = [], baseDir = dirPath, exclusions =
   return arrayOfFiles;
 }
 
-
 async function cleanupRemoteDirectory(client, remoteDir, exclusions) {
   core.info('🗑️  Cleaning up remote directory...');
   
@@ -30012,7 +30011,7 @@ async function ensureRemoteDir(client, remotePath) {
   }
 }
 
-async function uploadFiles(client, buildDir, remoteDir, excludeIndex) {
+async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions = []) {
   core.info('📤 Uploading files...');
   
   const files = getAllFiles(buildDir, [], buildDir, exclusions);
