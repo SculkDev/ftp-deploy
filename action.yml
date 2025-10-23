@@ -1,0 +1,41 @@
+name: 'FTP Deploy'
+description: 'FTP deployment action'
+author: 'edwardcoder'
+
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+inputs:
+  ftp-server:
+    description: 'FTP server hostname'
+    required: true
+  ftp-username:
+    description: 'FTP username'
+    required: true
+  ftp-password:
+    description: 'FTP password'
+    required: true
+  ftp-remote-dir:
+    description: 'Remote directory path on FTP server (e.g., /public_html)'
+    required: true
+  build-dir:
+    description: 'Local directory containing built files to upload'
+    required: true
+    default: './dist'
+  exclusions:
+    description: 'Comma-separated list of files/folders to exclude from deletion (e.g., .htaccess,uploads,web.config)'
+    required: false
+    default: '.htaccess,.well-known'
+  ftp-port:
+    description: 'FTP server port'
+    required: false
+    default: '21'
+  secure:
+    description: 'Use FTP over SSL (FTPS)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

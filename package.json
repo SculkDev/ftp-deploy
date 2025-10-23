@@ -1,0 +1,27 @@
+{
+  "name": "ftp-deploy",
+  "version": "1.0.0",
+  "description": "GitHub Action to deploy files to FTP server with cleanup",
+  "main": "index.js",
+  "scripts": {
+    "build": "ncc build index.js -o dist",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "github-action",
+    "ftp",
+    "deploy",
+    "deployment",
+    "ftp-upload"
+  ],
+  "author": "Eduard Ilin",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0",
+    "basic-ftp": "^5.0.5"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1"
+  }
+}
