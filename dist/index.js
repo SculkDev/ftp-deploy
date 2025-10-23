@@ -29939,23 +29939,29 @@ function shouldExclude(itemName, exclusions) {
   });
 }
 
-function getAllFiles(dirPath, arrayOfFiles = [], baseDir = dirPath) {
+function getAllFiles(dirPath, arrayOfFiles = [], baseDir = dirPath, exclusions = []) {
   const files = fs.readdirSync(dirPath);
 
   files.forEach(file => {
     const filePath = path.join(dirPath, file);
+    const relativePath = path.relative(baseDir, filePath);
+    
+    if (shouldExclude(relativePath, exclusions)) {
+      return;
+    }
+    
     const stat = fs.statSync(filePath);
 
     if (stat.isDirectory()) {
-      arrayOfFiles = getAllFiles(filePath, arrayOfFiles, baseDir);
+      arrayOfFiles = getAllFiles(filePath, arrayOfFiles, baseDir, exclusions);
     } else {
-      const relativePath = path.relative(baseDir, filePath);
       arrayOfFiles.push(relativePath);
     }
   });
 
   return arrayOfFiles;
 }
+
 
 async function cleanupRemoteDirectory(client, remoteDir, exclusions) {
   core.info('🗑️  Cleaning up remote directory...');
@@ -30009,7 +30015,7 @@ async function ensureRemoteDir(client, remotePath) {
 async function uploadFiles(client, buildDir, remoteDir, excludeIndex) {
   core.info('📤 Uploading files...');
   
-  const files = getAllFiles(buildDir);
+  const files = getAllFiles(buildDir, [], buildDir, exclusions);
   
   const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
   const otherFiles = files.filter(f => f !== indexFile);
@@ -30115,7 +30121,7 @@ async function run() {
     await cleanupRemoteDirectory(client, ftpRemoteDir, exclusions);
     core.info('');
     
-    const indexFile = await uploadFiles(client, buildDir, ftpRemoteDir, true);
+    const indexFile = await uploadFiles(client, buildDir, ftpRemoteDir, true, exclusions);
     core.info('');
     
     await uploadIndexFile(client, buildDir, ftpRemoteDir, indexFile);
