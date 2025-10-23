@@ -21,3 +21,4 @@ jobs:
           ftp-password: ${{ secrets.FTP_PASSWORD }}
           ftp-remote-dir: /
           build-dir: ./
+          exclusions: .git
