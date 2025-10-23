@@ -1,4 +1,4 @@
-name: 'FTP Deploy'
+name: 'FTP Deploy (index.html last)'
 description: 'FTP deployment action'
 author: 'edwardcoder'
 
