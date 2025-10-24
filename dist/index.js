@@ -30023,8 +30023,6 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
   
   core.info(`Uploading ${filesToUpload.length} files...`);
   
-  await client.cd(remoteDir);
-  
   for (const file of filesToUpload) {
     const localPath = path.join(buildDir, file);
     const remotePath = file.replace(/\\/g, '/'); // Normalize path separators for FTP
@@ -30032,8 +30030,7 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
     const remoteFileDir = path.posix.dirname(remotePath);
     if (remoteFileDir && remoteFileDir !== '.') {
       try {
-        await client.ensureDir(remoteFileDir);
-        await client.cd(remoteDir); // Go back to base directory
+        await client.ensureDir(path.posix.join(remoteDir, remoteFileDir));
       } catch (error) {
         core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
       }
@@ -30041,7 +30038,7 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
     
     try {
       core.info(`  ⬆️  Uploading: ${file}`);
-      await client.uploadFrom(localPath, remotePath);
+      await client.uploadFrom(localPath, path.posix.join(remoteDir, remotePath));
     } catch (uploadError) {
       core.warning(`Failed to upload ${file}: ${uploadError.message}`);
     }
