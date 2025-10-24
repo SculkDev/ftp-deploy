@@ -12,7 +12,6 @@ function parseExclusions(exclusionsString) {
 
 function shouldExclude(itemName, exclusions) {
   return exclusions.some(exclusion => {
-    // Exact match or starts with (for directories)
     return itemName === exclusion || itemName.startsWith(exclusion + '/');
   });
 }
@@ -89,40 +88,140 @@ async function ensureRemoteDir(client, remotePath) {
   }
 }
 
-async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions = []) {
-  core.info('📤 Uploading files...');
+async function createFTPClient(ftpServer, ftpPort, ftpUsername, ftpPassword, useSecure) {
+  const client = new ftp.Client();
+  client.ftp.verbose = core.isDebug();
   
-  await client.cd(remoteDir);
+  // Set timeout to 60 seconds to match server's timeout
+  client.ftp.timeout = 60000;
+  
+  await client.access({
+    host: ftpServer,
+    port: ftpPort,
+    user: ftpUsername,
+    password: ftpPassword,
+    secure: useSecure,
+    secureOptions: {
+      rejectUnauthorized: false
+    }
+  });
+  
+  return client;
+}
+
+async function keepAlive(client) {
+  try {
+    await client.send('NOOP');
+  } catch (error) {
+    // Ignore NOOP errors
+  }
+}
+
+async function uploadWithRetry(client, localPath, remotePath, ftpConfig, maxRetries = 3) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await client.uploadFrom(localPath, remotePath);
+      return true;
+    } catch (error) {
+      lastError = error;
+      const isConnectionError = 
+        error.message.includes('ECONNRESET') || 
+        error.message.includes('closed') ||
+        error.message.includes('Timeout') ||
+        error.code === 421;
+      
+      if (isConnectionError && attempt < maxRetries) {
+        core.warning(`Connection lost during upload (attempt ${attempt}/${maxRetries}), reconnecting...`);
+        
+        try {
+          client.close();
+        } catch (e) {}
+        
+        // Wait before reconnecting
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Reconnect
+        const newClient = await createFTPClient(
+          ftpConfig.server,
+          ftpConfig.port,
+          ftpConfig.username,
+          ftpConfig.password,
+          ftpConfig.secure
+        );
+        
+        // Copy the new client to the old reference
+        Object.assign(client, newClient);
+        
+        // Navigate back to the correct directory
+        await client.cd(ftpConfig.remoteDir);
+      } else {
+        throw lastError;
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions, ftpConfig) {
+  core.info('📤 Uploading files...');
   
   const files = getAllFiles(buildDir, [], buildDir, exclusions);
   const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
+  const otherFiles = files.filter(f => f !== indexFile);
+  const filesToUpload = excludeIndex ? otherFiles : files;
   
-  // Upload directory with proper filtering
-  await client.uploadFromDir(buildDir, {
-    filter: (localPath) => {
-      const relativePath = path.relative(buildDir, localPath).replace(/\\/g, '/');
-      
-      // Exclude based on exclusions list
-      if (shouldExclude(relativePath, exclusions)) {
-        core.info(`  ⏭️  Skipping (excluded): ${relativePath}`);
-        return false;
-      }
-      
-      // Exclude index.html if excludeIndex is true
-      if (excludeIndex && (relativePath === 'index.html')) {
-        core.info(`  ⏭️  Skipping (will upload last): ${relativePath}`);
-        return false;
-      }
-      
-      core.info(`  ⬆️  Uploading: ${relativePath}`);
-      return true;
+  core.info(`Uploading ${filesToUpload.length} files...`);
+  
+  await client.cd(remoteDir);
+  
+  const createdDirs = new Set();
+  let fileCount = 0;
+  let lastKeepAlive = Date.now();
+  
+  for (const file of filesToUpload) {
+    const localPath = path.join(buildDir, file);
+    const remotePath = file.replace(/\\/g, '/');
+    
+    // Send keepalive every 30 seconds
+    if (Date.now() - lastKeepAlive > 30000) {
+      await keepAlive(client);
+      lastKeepAlive = Date.now();
     }
-  });
+    
+    // Ensure directory exists
+    const remoteFileDir = path.posix.dirname(remotePath);
+    if (remoteFileDir && remoteFileDir !== '.' && !createdDirs.has(remoteFileDir)) {
+      try {
+        await client.ensureDir(remoteFileDir);
+        await client.cd(remoteDir);
+        createdDirs.add(remoteFileDir);
+      } catch (error) {
+        core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
+      }
+    }
+    
+    try {
+      core.info(`  ⬆️  Uploading: ${file}`);
+      await uploadWithRetry(client, localPath, remotePath, ftpConfig);
+      fileCount++;
+      
+      // Send keepalive every 10 files
+      if (fileCount % 10 === 0) {
+        await keepAlive(client);
+        lastKeepAlive = Date.now();
+      }
+    } catch (uploadError) {
+      core.warning(`Failed to upload ${file} after retries: ${uploadError.message}`);
+    }
+  }
   
   return indexFile;
 }
 
-async function uploadIndexFile(client, buildDir, remoteDir, indexFile) {
+async function uploadIndexFile(client, buildDir, remoteDir, indexFile, ftpConfig) {
   if (!indexFile) {
     core.info('⚠️  No index.html file found in build directory');
     return;
@@ -136,7 +235,7 @@ async function uploadIndexFile(client, buildDir, remoteDir, indexFile) {
   await client.cd(remoteDir);
   
   try {
-    await client.uploadFrom(localPath, remotePath);
+    await uploadWithRetry(client, localPath, remotePath, ftpConfig);
     core.info('  ✅ index.html uploaded successfully');
   } catch (error) {
     throw new Error(`Failed to upload index.html: ${error.message}`);
@@ -144,11 +243,9 @@ async function uploadIndexFile(client, buildDir, remoteDir, indexFile) {
 }
 
 async function run() {
-  const client = new ftp.Client();
-  client.ftp.verbose = core.isDebug();
+  let client = null;
   
   try {
-    // Get inputs
     const ftpServer = core.getInput('ftp-server', { required: true });
     const ftpUsername = core.getInput('ftp-username', { required: true });
     const ftpPassword = core.getInput('ftp-password', { required: true });
@@ -159,6 +256,15 @@ async function run() {
     const useSecure = core.getInput('secure') === 'true';
     
     const exclusions = parseExclusions(exclusionsString);
+    
+    const ftpConfig = {
+      server: ftpServer,
+      port: ftpPort,
+      username: ftpUsername,
+      password: ftpPassword,
+      secure: useSecure,
+      remoteDir: ftpRemoteDir
+    };
     
     core.info('🚀 Starting FTP deployment...');
     core.info(`📡 Server: ${ftpServer}:${ftpPort}`);
@@ -174,16 +280,7 @@ async function run() {
     }
     
     core.info('🔌 Connecting to FTP server...');
-    await client.access({
-      host: ftpServer,
-      port: ftpPort,
-      user: ftpUsername,
-      password: ftpPassword,
-      secure: useSecure,
-      secureOptions: {
-        rejectUnauthorized: false // Allow self-signed certificates
-      }
-    });
+    client = await createFTPClient(ftpServer, ftpPort, ftpUsername, ftpPassword, useSecure);
     core.info('✅ Connected successfully');
     core.info('');
     
@@ -192,10 +289,10 @@ async function run() {
     await cleanupRemoteDirectory(client, ftpRemoteDir, exclusions);
     core.info('');
     
-    const indexFile = await uploadFiles(client, buildDir, ftpRemoteDir, true, exclusions);
+    const indexFile = await uploadFiles(client, buildDir, ftpRemoteDir, true, exclusions, ftpConfig);
     core.info('');
     
-    await uploadIndexFile(client, buildDir, ftpRemoteDir, indexFile);
+    await uploadIndexFile(client, buildDir, ftpRemoteDir, indexFile, ftpConfig);
     core.info('');
     
     core.info('✅ Deployment completed successfully!');
@@ -206,7 +303,9 @@ async function run() {
       core.error(error.stack);
     }
   } finally {
-    client.close();
+    if (client) {
+      client.close();
+    }
   }
 }
 
