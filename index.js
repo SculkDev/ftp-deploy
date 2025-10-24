@@ -101,19 +101,20 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
   
   core.info(`Uploading ${filesToUpload.length} files...`);
   
-  // Track created directories to avoid redundant ensureDir calls
-  const createdDirs = new Set();
+  // Change to the remote directory once at the start
+  await client.cd(remoteDir);
   
   for (const file of filesToUpload) {
     const localPath = path.join(buildDir, file);
     const remotePath = file.replace(/\\/g, '/'); // Normalize path separators for FTP
-    const fullRemotePath = path.posix.join(remoteDir, remotePath);
     
-    const remoteFileDir = path.posix.dirname(fullRemotePath);
-    if (remoteFileDir && remoteFileDir !== '.' && !createdDirs.has(remoteFileDir)) {
+    // Ensure the directory structure exists
+    const remoteFileDir = path.posix.dirname(remotePath);
+    if (remoteFileDir && remoteFileDir !== '.') {
       try {
         await client.ensureDir(remoteFileDir);
-        createdDirs.add(remoteFileDir);
+        // Go back to the base remote directory
+        await client.cd(remoteDir);
       } catch (error) {
         core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
       }
@@ -121,7 +122,8 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
     
     try {
       core.info(`  ⬆️  Uploading: ${file}`);
-      await client.uploadFrom(localPath, fullRemotePath);
+      // Upload with relative path from current working directory
+      await client.uploadFrom(localPath, remotePath);
     } catch (uploadError) {
       core.warning(`Failed to upload ${file}: ${uploadError.message}`);
     }
@@ -139,7 +141,9 @@ async function uploadIndexFile(client, buildDir, remoteDir, indexFile) {
   core.info('📄 Uploading index.html last...');
   
   const localPath = path.join(buildDir, indexFile);
-  const remotePath = path.posix.join(remoteDir, indexFile.replace(/\\/g, '/'));
+  const remotePath = indexFile.replace(/\\/g, '/');
+  
+  await client.cd(remoteDir);
   
   try {
     await client.uploadFrom(localPath, remotePath);
