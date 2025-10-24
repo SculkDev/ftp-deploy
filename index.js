@@ -101,14 +101,19 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
   
   core.info(`Uploading ${filesToUpload.length} files...`);
   
+  // Track created directories to avoid redundant ensureDir calls
+  const createdDirs = new Set();
+  
   for (const file of filesToUpload) {
     const localPath = path.join(buildDir, file);
     const remotePath = file.replace(/\\/g, '/'); // Normalize path separators for FTP
+    const fullRemotePath = path.posix.join(remoteDir, remotePath);
     
-    const remoteFileDir = path.posix.dirname(remotePath);
-    if (remoteFileDir && remoteFileDir !== '.') {
+    const remoteFileDir = path.posix.dirname(fullRemotePath);
+    if (remoteFileDir && remoteFileDir !== '.' && !createdDirs.has(remoteFileDir)) {
       try {
-        await client.ensureDir(path.posix.join(remoteDir, remoteFileDir));
+        await client.ensureDir(remoteFileDir);
+        createdDirs.add(remoteFileDir);
       } catch (error) {
         core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
       }
@@ -116,7 +121,7 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
     
     try {
       core.info(`  ⬆️  Uploading: ${file}`);
-      await client.uploadFrom(localPath, path.posix.join(remoteDir, remotePath));
+      await client.uploadFrom(localPath, fullRemotePath);
     } catch (uploadError) {
       core.warning(`Failed to upload ${file}: ${uploadError.message}`);
     }
@@ -134,9 +139,7 @@ async function uploadIndexFile(client, buildDir, remoteDir, indexFile) {
   core.info('📄 Uploading index.html last...');
   
   const localPath = path.join(buildDir, indexFile);
-  const remotePath = indexFile.replace(/\\/g, '/');
-  
-  await client.cd(remoteDir);
+  const remotePath = path.posix.join(remoteDir, indexFile.replace(/\\/g, '/'));
   
   try {
     await client.uploadFrom(localPath, remotePath);
