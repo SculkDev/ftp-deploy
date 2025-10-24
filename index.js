@@ -88,11 +88,23 @@ async function ensureRemoteDir(client, remotePath) {
   }
 }
 
+async function createDirectoryRecursive(client, fullPath) {
+  const parts = fullPath.split('/').filter(p => p);
+  let current = '/';
+  
+  for (const part of parts) {
+    current = path.posix.join(current, part);
+    try {
+      await client.send(`MKD ${current}`);
+    } catch (error) {
+      // Directory might already exist, ignore error
+    }
+  }
+}
+
 async function createFTPClient(ftpServer, ftpPort, ftpUsername, ftpPassword, useSecure) {
   const client = new ftp.Client();
   client.ftp.verbose = core.isDebug();
-  
-  // Set timeout to 60 seconds to match server's timeout
   client.ftp.timeout = 60000;
   
   await client.access({
@@ -117,12 +129,13 @@ async function keepAlive(client) {
   }
 }
 
-async function uploadWithRetry(client, localPath, remotePath, ftpConfig, maxRetries = 3) {
+async function uploadWithRetry(client, localPath, remoteFullPath, ftpConfig, maxRetries = 3) {
   let lastError;
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await client.uploadFrom(localPath, remotePath);
+      // Use uploadFrom with full absolute remote path
+      await client.uploadFrom(localPath, remoteFullPath);
       return true;
     } catch (error) {
       lastError = error;
@@ -130,6 +143,7 @@ async function uploadWithRetry(client, localPath, remotePath, ftpConfig, maxRetr
         error.message.includes('ECONNRESET') || 
         error.message.includes('closed') ||
         error.message.includes('Timeout') ||
+        error.message.includes('QUIT') ||
         error.code === 421;
       
       if (isConnectionError && attempt < maxRetries) {
@@ -139,10 +153,8 @@ async function uploadWithRetry(client, localPath, remotePath, ftpConfig, maxRetr
           client.close();
         } catch (e) {}
         
-        // Wait before reconnecting
         await new Promise(resolve => setTimeout(resolve, 2000));
         
-        // Reconnect
         const newClient = await createFTPClient(
           ftpConfig.server,
           ftpConfig.port,
@@ -151,11 +163,7 @@ async function uploadWithRetry(client, localPath, remotePath, ftpConfig, maxRetr
           ftpConfig.secure
         );
         
-        // Copy the new client to the old reference
         Object.assign(client, newClient);
-        
-        // Navigate back to the correct directory
-        await client.cd(ftpConfig.remoteDir);
       } else {
         throw lastError;
       }
@@ -175,15 +183,40 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
   
   core.info(`Uploading ${filesToUpload.length} files...`);
   
-  await client.cd(remoteDir);
-  
-  const createdDirs = new Set();
   let fileCount = 0;
   let lastKeepAlive = Date.now();
   
+  // Collect all unique directories
+  const allDirs = new Set();
+  for (const file of filesToUpload) {
+    const dir = path.posix.dirname(file.replace(/\\/g, '/'));
+    if (dir !== '.') {
+      allDirs.add(dir);
+    }
+  }
+  
+  // Create all directories first using absolute paths
+  for (const dir of allDirs) {
+    try {
+      const fullRemotePath = path.posix.join(remoteDir, dir);
+      core.info(`  📁 Creating directory: ${fullRemotePath}`);
+      await createDirectoryRecursive(client, fullRemotePath);
+    } catch (error) {
+      core.warning(`Failed to create directory ${dir}: ${error.message}`);
+    }
+  }
+  
+  // Upload all files using absolute paths
   for (const file of filesToUpload) {
     const localPath = path.join(buildDir, file);
     const remotePath = file.replace(/\\/g, '/');
+    const fullRemotePath = path.posix.join(remoteDir, remotePath);
+    
+    // Check if local file exists
+    if (!fs.existsSync(localPath)) {
+      core.warning(`Local file does not exist: ${localPath}`);
+      continue;
+    }
     
     // Send keepalive every 30 seconds
     if (Date.now() - lastKeepAlive > 30000) {
@@ -191,21 +224,9 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
       lastKeepAlive = Date.now();
     }
     
-    // Ensure directory exists
-    const remoteFileDir = path.posix.dirname(remotePath);
-    if (remoteFileDir && remoteFileDir !== '.' && !createdDirs.has(remoteFileDir)) {
-      try {
-        await client.ensureDir(remoteFileDir);
-        await client.cd(remoteDir);
-        createdDirs.add(remoteFileDir);
-      } catch (error) {
-        core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
-      }
-    }
-    
     try {
-      core.info(`  ⬆️  Uploading: ${file}`);
-      await uploadWithRetry(client, localPath, remotePath, ftpConfig);
+      core.info(`  ⬆️  Uploading: ${file} -> ${fullRemotePath}`);
+      await uploadWithRetry(client, localPath, fullRemotePath, ftpConfig);
       fileCount++;
       
       // Send keepalive every 10 files
@@ -230,12 +251,10 @@ async function uploadIndexFile(client, buildDir, remoteDir, indexFile, ftpConfig
   core.info('📄 Uploading index.html last...');
   
   const localPath = path.join(buildDir, indexFile);
-  const remotePath = indexFile.replace(/\\/g, '/');
-  
-  await client.cd(remoteDir);
+  const fullRemotePath = path.posix.join(remoteDir, indexFile.replace(/\\/g, '/'));
   
   try {
-    await uploadWithRetry(client, localPath, remotePath, ftpConfig);
+    await uploadWithRetry(client, localPath, fullRemotePath, ftpConfig);
     core.info('  ✅ index.html uploaded successfully');
   } catch (error) {
     throw new Error(`Failed to upload index.html: ${error.message}`);
