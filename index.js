@@ -94,28 +94,30 @@ async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions
   
   await client.cd(remoteDir);
   
-  // Use uploadFromDir which handles directories better
+  const files = getAllFiles(buildDir, [], buildDir, exclusions);
+  const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
+  
+  // Upload directory with proper filtering
   await client.uploadFromDir(buildDir, {
-    filter: (info) => {
-      const relativePath = path.relative(buildDir, info);
+    filter: (localPath) => {
+      const relativePath = path.relative(buildDir, localPath).replace(/\\/g, '/');
       
       // Exclude based on exclusions list
       if (shouldExclude(relativePath, exclusions)) {
+        core.info(`  ⏭️  Skipping (excluded): ${relativePath}`);
         return false;
       }
       
       // Exclude index.html if excludeIndex is true
-      if (excludeIndex && (relativePath === 'index.html' || relativePath === path.normalize('index.html'))) {
+      if (excludeIndex && (relativePath === 'index.html')) {
+        core.info(`  ⏭️  Skipping (will upload last): ${relativePath}`);
         return false;
       }
       
+      core.info(`  ⬆️  Uploading: ${relativePath}`);
       return true;
     }
   });
-  
-  // Find index file
-  const files = getAllFiles(buildDir, [], buildDir, exclusions);
-  const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
   
   return indexFile;
 }
