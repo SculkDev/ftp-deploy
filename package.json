@@ -1,6 +1,6 @@
 {
   "name": "ftp-deploy",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "GitHub Action to deploy files to FTP server with cleanup",
   "main": "index.js",
   "scripts": {

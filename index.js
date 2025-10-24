@@ -92,42 +92,30 @@ async function ensureRemoteDir(client, remotePath) {
 async function uploadFiles(client, buildDir, remoteDir, excludeIndex, exclusions = []) {
   core.info('📤 Uploading files...');
   
-  const files = getAllFiles(buildDir, [], buildDir, exclusions);
-  
-  const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
-  const otherFiles = files.filter(f => f !== indexFile);
-  
-  const filesToUpload = excludeIndex ? otherFiles : files;
-  
-  core.info(`Uploading ${filesToUpload.length} files...`);
-  
-  // Change to the remote directory once at the start
   await client.cd(remoteDir);
   
-  for (const file of filesToUpload) {
-    const localPath = path.join(buildDir, file);
-    const remotePath = file.replace(/\\/g, '/'); // Normalize path separators for FTP
-    
-    // Ensure the directory structure exists
-    const remoteFileDir = path.posix.dirname(remotePath);
-    if (remoteFileDir && remoteFileDir !== '.') {
-      try {
-        await client.ensureDir(remoteFileDir);
-        // Go back to the base remote directory
-        await client.cd(remoteDir);
-      } catch (error) {
-        core.warning(`Failed to create directory ${remoteFileDir}: ${error.message}`);
+  // Use uploadFromDir which handles directories better
+  await client.uploadFromDir(buildDir, {
+    filter: (info) => {
+      const relativePath = path.relative(buildDir, info);
+      
+      // Exclude based on exclusions list
+      if (shouldExclude(relativePath, exclusions)) {
+        return false;
       }
+      
+      // Exclude index.html if excludeIndex is true
+      if (excludeIndex && (relativePath === 'index.html' || relativePath === path.normalize('index.html'))) {
+        return false;
+      }
+      
+      return true;
     }
-    
-    try {
-      core.info(`  ⬆️  Uploading: ${file}`);
-      // Upload with relative path from current working directory
-      await client.uploadFrom(localPath, remotePath);
-    } catch (uploadError) {
-      core.warning(`Failed to upload ${file}: ${uploadError.message}`);
-    }
-  }
+  });
+  
+  // Find index file
+  const files = getAllFiles(buildDir, [], buildDir, exclusions);
+  const indexFile = files.find(f => f === 'index.html' || f === path.normalize('index.html'));
   
   return indexFile;
 }
